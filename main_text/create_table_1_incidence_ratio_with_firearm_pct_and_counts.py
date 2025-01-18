@@ -1,84 +1,133 @@
+from get_draws.api import get_draws
 from db_queries import get_outputs
 from db_queries import get_location_metadata
 import pandas as pd
+from db_queries import get_population 
+import numpy as np
 
-OUT_DIR = "FILEPATH"
+cause_id = 718
+# subset to regions and global
+locs = get_location_metadata(release_id=9, location_set_id=1).query("level <= 2")
+loc_ids = list(locs['location_id'].unique())
 
-def main():
-    # pulls incidence and deaths
-    # calculates the ratio between the 2
-    cause_id = 718
-    # subset to regions and global
-    locs = get_location_metadata(release_id=9, location_set_id=1).query("level == 0 | level == 2")
-    loc_ids = list(locs['location_id'].unique())
+draw_cols = []
+for i in range(500):
+    draw_cols.append(f"draw_{i}")
 
-    df_2021_deaths = get_outputs('cause', release_id=9, cause_id=cause_id,
-                          metric_id=1, age_group_id=22, year_id=2021,
-                          location_id=loc_ids, sex_id=[1,2]
-                         )
+def calc_ratio(sex_id, location_id):
+    pop = get_population(release_id=9, sex_id=sex_id, year_id=2021, location_id=location_id)
 
-    df_2021_gun_deaths = get_outputs('cause', release_id=9, cause_id=721,
-                          metric_id=1, age_group_id=22, year_id=2021,
-                          location_id=loc_ids, sex_id=[1,2]
-                         )
+    df_2021_deaths_draws = get_draws("cause_id", source='codcorrect', gbd_id=718, release_id=9, year_id=2021, 
+              location_id=location_id, age_group_id=22, sex_id=[sex_id], measure_id=1
+             )
 
-    df_2021_incidence = get_outputs('cause', release_id=9, cause_id=cause_id,
-                          metric_id=1, age_group_id=22, year_id=2021,
-                          measure_id=6,
-                          location_id=loc_ids, sex_id=[1,2]
-                         )
+    df_2021_gun_deaths_draws = get_draws("cause_id", source='codcorrect', gbd_id=721, release_id=9, year_id=2021, 
+              location_id=location_id, age_group_id=22, sex_id=[sex_id], measure_id=1
+             )
 
-    df_2021_deaths = df_2021_deaths[['location_name','sex','val','upper','lower']]
-    df_2021_gun_deaths = df_2021_gun_deaths[['location_name','sex','val','upper','lower']]
-    df_2021_incidence = df_2021_incidence[['location_name','sex','val','upper','lower']]
+    df_2021_incidence_draws = get_draws("cause_id", source='como', gbd_id=718, release_id=9, year_id=2021, 
+              location_id=location_id, age_group_id=22, sex_id=[sex_id], measure_id=6)
 
-    df_2021_deaths= df_2021_deaths.rename(columns={"val":"val.deaths", "upper":"upper.deaths", "lower":"lower.deaths"})
-    df_2021_gun_deaths= df_2021_gun_deaths.rename(columns={"val":"val.gun_deaths", "upper":"upper.gun_deaths", "lower":"lower.gun_deaths"})
-    df_2021_incidence = df_2021_incidence.rename(columns={"val":"val.incidence", "upper":"upper.incidence", "lower":"lower.incidence"})
+    
+    for draw in draw_cols:
+        df_2021_incidence_draws[draw] = df_2021_incidence_draws[draw] * pop['population'][0]
+        
+    df_2021_incidence_ratio = df_2021_incidence_draws.copy()
+    for draw in draw_cols:
+        df_2021_incidence_ratio[draw] = df_2021_incidence_ratio[draw] / df_2021_deaths_draws[draw]
+        
+    df_2021_pct_firearm = df_2021_deaths_draws.copy()
+    for draw in draw_cols:
+        df_2021_pct_firearm[draw] = df_2021_gun_deaths_draws[draw] / df_2021_pct_firearm[draw]
+    
+    if sex_id == 1:
+        df_2021_incidence_draws['val.incidence.Male'] = df_2021_incidence_draws[draw_cols].mean(axis=1)
+        df_2021_incidence_draws['upper.incidence.Male'] = df_2021_incidence_draws.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1)
+        df_2021_incidence_draws['lower.incidence.Male'] = df_2021_incidence_draws.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1)
+        
+        df_2021_deaths_draws['val.deaths.Male'] = df_2021_deaths_draws[draw_cols].mean(axis=1)
+        df_2021_deaths_draws['upper.deaths.Male'] = df_2021_deaths_draws.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1)
+        df_2021_deaths_draws['lower.deaths.Male'] = df_2021_deaths_draws.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1)
+        
+        df_2021_incidence_ratio['val.ratio.Male'] = df_2021_incidence_ratio[draw_cols].mean(axis=1)
+        df_2021_incidence_ratio['upper.ratio.Male'] = df_2021_incidence_ratio.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1)
+        df_2021_incidence_ratio['lower.ratio.Male'] = df_2021_incidence_ratio.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1)
+        
+        df_2021_gun_deaths_draws['val.firearm_deaths.Male'] = df_2021_gun_deaths_draws[draw_cols].mean(axis=1)
+        df_2021_gun_deaths_draws['upper.firearm_deaths.Male'] = df_2021_gun_deaths_draws.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1)
+        df_2021_gun_deaths_draws['lower.firearm_deaths.Male'] = df_2021_gun_deaths_draws.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1)
+        
+        df_2021_pct_firearm['val.firearm_pct.Male'] = df_2021_pct_firearm[draw_cols].mean(axis=1) * 100
+        df_2021_pct_firearm['upper.firearm_pct.Male'] = df_2021_pct_firearm.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1) * 100
+        df_2021_pct_firearm['lower.firearm_pct.Male'] = df_2021_pct_firearm.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1) * 100
+        
+        df_2021_incidence_draws = df_2021_incidence_draws[['location_id', 'val.incidence.Male','upper.incidence.Male','lower.incidence.Male']]
+        df_2021_deaths_draws = df_2021_deaths_draws[['location_id', 'val.deaths.Male','upper.deaths.Male','lower.deaths.Male']]
+        df_2021_incidence_ratio = df_2021_incidence_ratio[['location_id', 'val.ratio.Male','upper.ratio.Male','lower.ratio.Male']]
+        df_2021_gun_deaths_draws = df_2021_gun_deaths_draws[['location_id', 'val.firearm_deaths.Male','upper.firearm_deaths.Male','lower.firearm_deaths.Male']]
+        df_2021_pct_firearm = df_2021_pct_firearm[['location_id', 'val.firearm_pct.Male','upper.firearm_pct.Male','lower.firearm_pct.Male']]
+        
+        
+    else: 
+        df_2021_incidence_draws['val.incidence.Female'] = df_2021_incidence_draws[draw_cols].mean(axis=1)
+        df_2021_incidence_draws['upper.incidence.Female'] = df_2021_incidence_draws.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1)
+        df_2021_incidence_draws['lower.incidence.Female'] = df_2021_incidence_draws.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1)
+        
+        df_2021_deaths_draws['val.deaths.Female'] = df_2021_deaths_draws[draw_cols].mean(axis=1)
+        df_2021_deaths_draws['upper.deaths.Female'] = df_2021_deaths_draws.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1)
+        df_2021_deaths_draws['lower.deaths.Female'] = df_2021_deaths_draws.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1)
+        
+        df_2021_incidence_ratio['val.ratio.Female'] = df_2021_incidence_ratio[draw_cols].mean(axis=1)
+        df_2021_incidence_ratio['upper.ratio.Female'] = df_2021_incidence_ratio.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1)
+        df_2021_incidence_ratio['lower.ratio.Female'] = df_2021_incidence_ratio.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1)
+        
+        df_2021_gun_deaths_draws['val.firearm_deaths.Female'] = df_2021_gun_deaths_draws[draw_cols].mean(axis=1)
+        df_2021_gun_deaths_draws['upper.firearm_deaths.Female'] = df_2021_gun_deaths_draws.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1)
+        df_2021_gun_deaths_draws['lower.firearm_deaths.Female'] = df_2021_gun_deaths_draws.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1)
+        
+        df_2021_pct_firearm['val.firearm_pct.Female'] = df_2021_pct_firearm[draw_cols].mean(axis=1) * 100
+        df_2021_pct_firearm['upper.firearm_pct.Female'] = df_2021_pct_firearm.apply(lambda x: np.percentile(x[draw_cols], 97.5), axis=1) * 100
+        df_2021_pct_firearm['lower.firearm_pct.Female'] = df_2021_pct_firearm.apply(lambda x: np.percentile(x[draw_cols], 2.5), axis=1) * 100
+        
+        df_2021_incidence_draws = df_2021_incidence_draws[['location_id', 'val.incidence.Female','upper.incidence.Female','lower.incidence.Female']]
+        df_2021_deaths_draws = df_2021_deaths_draws[['location_id', 'val.deaths.Female','upper.deaths.Female','lower.deaths.Female']]
+        df_2021_incidence_ratio = df_2021_incidence_ratio[['location_id', 'val.ratio.Female','upper.ratio.Female','lower.ratio.Female']]
+        df_2021_gun_deaths_draws = df_2021_gun_deaths_draws[['location_id', 'val.firearm_deaths.Female','upper.firearm_deaths.Female','lower.firearm_deaths.Female']]
+        df_2021_pct_firearm = df_2021_pct_firearm[['location_id', 'val.firearm_pct.Female','upper.firearm_pct.Female','lower.firearm_pct.Female']]
+        
+    df = pd.merge(df_2021_deaths_draws, df_2021_incidence_draws).merge(df_2021_incidence_ratio).merge(df_2021_gun_deaths_draws).merge(df_2021_pct_firearm)
+        
+    return df
 
-    df = df_2021_deaths.merge(df_2021_incidence).merge(df_2021_gun_deaths)
-    df['val.ratio'] = df["val.incidence"] / df["val.deaths"]
-    df['val.firearm_pct'] = (df["val.gun_deaths"] / df["val.deaths"]) * 100
+male_df = pd.DataFrame()
+female_df = pd.DataFrame()
+for loc in loc_ids:
+    male_df = pd.concat([male_df, calc_ratio(1, loc)])
+    female_df = pd.concat([female_df, calc_ratio(2, loc)])
+    
+df = pd.merge(male_df, female_df)
 
-    df["upper.ratio"] = 0
-    df["lower.ratio"] = 0
-    df["upper.firearm_pct"] = 0
-    df["lower.firearm_pct"] = 0
+df = pd.merge(df,locs[['location_id','location_name','level','sort_order']])
 
-    df = df.pivot(index='location_name',columns='sex', values=[
-        "val.deaths","upper.deaths", "lower.deaths",
-        "val.incidence","upper.incidence", "lower.incidence",
-        "val.ratio", "upper.ratio", "lower.ratio",
-        "val.firearm_pct","upper.firearm_pct", "lower.firearm_pct"
+df = df[['location_name',
+         "level","sort_order",
+         'val.deaths.Male', 'upper.deaths.Male',
+       'lower.deaths.Male', 'val.incidence.Male', 'upper.incidence.Male',
+       'lower.incidence.Male', 'val.ratio.Male', 'upper.ratio.Male',
+       'lower.ratio.Male',
+       'val.firearm_deaths.Male','upper.firearm_deaths.Male','lower.firearm_deaths.Male',
+       'val.firearm_pct.Male', 'upper.firearm_pct.Male',
+       'lower.firearm_pct.Male', 'val.deaths.Female', 'upper.deaths.Female',
+       'lower.deaths.Female', 'val.incidence.Female', 'upper.incidence.Female',
+       'lower.incidence.Female', 'val.ratio.Female', 'upper.ratio.Female',
+       'lower.ratio.Female', 
+       'val.firearm_deaths.Female','upper.firearm_deaths.Female','lower.firearm_deaths.Female',
+       'val.firearm_pct.Female', 'upper.firearm_pct.Female',
+       'lower.firearm_pct.Female']]
 
-    ])
+df = df.sort_values("val.ratio.Female", ascending=False)
+df_not_global = df[df['location_name'] != 'Global']
+df_global = df[df['location_name'] == 'Global']
+df = pd.concat([df_global, df_not_global])
 
-    df.columns = df.columns.map(".".join)
-    df = df.reset_index()
-
-
-    df = df[[
-        'location_name',
-
-        "val.deaths.Male","upper.deaths.Male", "lower.deaths.Male",
-        "val.incidence.Male","upper.incidence.Male", "lower.incidence.Male",
-        "val.ratio.Male", "upper.ratio.Male", "lower.ratio.Male",
-        "val.firearm_pct.Male","upper.firearm_pct.Male", "lower.firearm_pct.Male",
-
-        "val.deaths.Female","upper.deaths.Female", "lower.deaths.Female",
-        "val.incidence.Female","upper.incidence.Female", "lower.incidence.Female",
-        "val.ratio.Female", "upper.ratio.Female", "lower.ratio.Female",
-        "val.firearm_pct.Female","upper.firearm_pct.Female", "lower.firearm_pct.Female"
-    ]]
-
-    # order rows so that global is at the top
-    # sort the remaining locations by the highest ratios for Females
-    df = df.sort_values("val.ratio.Female", ascending=False)
-    df_not_global = df[df['location_name'] != 'Global']
-    df_global = df[df['location_name'] == 'Global']
-    df = pd.concat([df_global, df_not_global])
-
-    df.to_csv(OUT_DIR+"FILEPATH", index=False)
-
-if __name__ == '__main__':
-    main()
+df.to_csv("table_1.csv", index=False)
